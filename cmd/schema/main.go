@@ -2,23 +2,28 @@ package main
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
 	_ "github.com/jackc/pgx/stdlib"
 	"github.com/yobert/schema"
-
-	"flag"
+	"os"
 	"path"
+	"time"
 )
 
 func main() {
 
+	start := time.Now()
+
 	var (
-		user   string
-		pass   string
-		host   string
-		port   int
-		name   string
-		search string
+		user    string
+		pass    string
+		host    string
+		port    int
+		name    string
+		search  string
+		dry     bool
+		verbose bool
 	)
 
 	flag.StringVar(&user, "user", "", "User")
@@ -27,6 +32,8 @@ func main() {
 	flag.IntVar(&port, "port", 5432, "TCP port")
 	flag.StringVar(&name, "db", "", "Database name")
 	flag.StringVar(&search, "search", "./sql/", "Search path for SQL files")
+	flag.BoolVar(&dry, "dry", false, "Dry run mode")
+	flag.BoolVar(&verbose, "verbose-sql", false, "Print out SQL")
 
 	flag.Parse()
 
@@ -39,11 +46,24 @@ func main() {
 	}
 	defer db.Close()
 
-	err = schema.Run(db, search)
+	options := &schema.Options{
+		Dry:        dry,
+		Verbose:    verbose,
+		DB:         db,
+		SearchPath: search,
+	}
+
+	msg := "Schema up to date"
+	if dry {
+		msg = "Schema dry run complete"
+	}
+
+	stats, err := schema.Run(options)
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 		return
 	}
 
-	fmt.Println("Schema up to date")
+	fmt.Fprintf(os.Stderr, "%s (%d change files, %d new, %.2fs)\n", msg, stats.Files, stats.New, time.Since(start).Seconds())
 }
