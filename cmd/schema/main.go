@@ -54,8 +54,10 @@ func main() {
 	}
 
 	msg := "Schema up to date"
+	verb := "executed"
 	if dry {
 		msg = "Schema dry run complete"
+		verb = "new"
 	}
 
 	stats, err := schema.Run(options)
@@ -65,5 +67,24 @@ func main() {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "%s (%d change files, %d new, %.2fs)\n", msg, stats.Files, stats.New, time.Since(start).Seconds())
+	took := time.Since(start)
+	took = truncate_duration(took)
+
+	fmt.Fprintf(os.Stderr, "%s (%d files, %d %s) in %s\n", msg, stats.Files, stats.New, verb, took)
+}
+
+func truncate_duration(d time.Duration) time.Duration {
+	if d > time.Millisecond {
+		d = d / time.Millisecond * time.Millisecond
+	}
+	if d > time.Millisecond*100 {
+		d = d / (time.Millisecond * 100) * time.Millisecond * 100
+	}
+	if d > time.Second*10 {
+		d = d / time.Second * time.Second
+	}
+	if d > time.Minute*10 {
+		d = d / time.Minute * time.Minute
+	}
+	return d
 }

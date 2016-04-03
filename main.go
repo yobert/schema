@@ -113,6 +113,7 @@ func CreateSchemaSupport(options *Options) error {
 		sql := `create schema schemasupport;`
 		if options.Verbose {
 			fmt.Println(sql)
+			fmt.Println()
 		}
 		if !options.Dry {
 			_, err = db.Exec(sql)
@@ -133,6 +134,7 @@ func CreateSchemaSupport(options *Options) error {
 		sql := `create table schemasupport.files (path text not null, created timestamptz not null default now(), md5 text not null);`
 		if options.Verbose {
 			fmt.Println(sql)
+			fmt.Println()
 		}
 		if options.Dry {
 			options.would_have_made_files_table = true
@@ -256,6 +258,7 @@ func Execute(options *Options, run List, stats *Stats) error {
 
 	if options.Verbose {
 		fmt.Println("begin;")
+		fmt.Println()
 	}
 
 	tx, err := db.Begin()
@@ -269,6 +272,7 @@ func Execute(options *Options, run List, stats *Stats) error {
 		if !commit {
 			if options.Verbose {
 				fmt.Println(`rollback;`)
+				fmt.Println()
 			}
 			err := tx.Rollback()
 			if err != nil {
@@ -278,7 +282,7 @@ func Execute(options *Options, run List, stats *Stats) error {
 	}()
 
 	for _, f := range run {
-		fmt.Printf("-- change file %s\n", f.Path)
+		fmt.Printf("-- %s\n", f.Path)
 
 		if strings.HasSuffix(f.Path, ".csv") {
 			err := schema_run_csv(options, tx, f.Path)
@@ -295,6 +299,7 @@ func Execute(options *Options, run List, stats *Stats) error {
 		sql := `insert into schemasupport.files (path, md5) values ($1, $2);`
 		if options.Verbose {
 			fmt.Println(debug_substitute(sql, f.Path, f.MD5))
+			fmt.Println()
 		}
 		if !options.Dry {
 			_, err := tx.Exec(sql, f.Path, f.MD5)
@@ -310,6 +315,7 @@ func Execute(options *Options, run List, stats *Stats) error {
 
 	if options.Verbose {
 		fmt.Println(`commit;`)
+		fmt.Println()
 	}
 	if !options.Dry {
 		err := tx.Commit()
