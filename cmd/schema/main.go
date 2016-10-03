@@ -30,7 +30,7 @@ func main() {
 	flag.StringVar(&pass, "p", "", "Password")
 	flag.StringVar(&host, "h", "localhost", "Host name")
 	flag.IntVar(&port, "port", 5432, "TCP port")
-	flag.StringVar(&name, "db", "", "Database name")
+	flag.StringVar(&name, "d", "", "Database name")
 	flag.StringVar(&search, "search", "./sql/", "Search path for SQL files")
 	flag.BoolVar(&dry, "dry", false, "Dry run mode")
 	flag.BoolVar(&verbose, "verbose-sql", false, "Print out SQL")
