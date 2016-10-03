@@ -26,9 +26,9 @@ func main() {
 		verbose bool
 	)
 
-	flag.StringVar(&user, "user", "", "User")
-	flag.StringVar(&pass, "pass", "", "Password")
-	flag.StringVar(&host, "host", "localhost", "Host name")
+	flag.StringVar(&user, "u", "", "User")
+	flag.StringVar(&pass, "p", "", "Password")
+	flag.StringVar(&host, "h", "localhost", "Host name")
 	flag.IntVar(&port, "port", 5432, "TCP port")
 	flag.StringVar(&name, "db", "", "Database name")
 	flag.StringVar(&search, "search", "./sql/", "Search path for SQL files")
