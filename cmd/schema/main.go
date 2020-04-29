@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	_ "github.com/jackc/pgx/stdlib"
-	"github.com/yobert/schema"
 	"os"
 	"path"
 	"time"
+
+	_ "github.com/jackc/pgx/v4/stdlib"
+	"github.com/yobert/schema"
 )
 
 func main() {

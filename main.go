@@ -380,7 +380,10 @@ func schema_run_csv(options *Options, tx *sql.Tx, file string) error {
 	isql := ""
 
 	r := csv.NewReader(f)
+	rowindex := 0
 	for {
+		rowindex++
+
 		row, err := r.Read()
 		if err == io.EOF {
 			break
@@ -415,7 +418,7 @@ func schema_run_csv(options *Options, tx *sql.Tx, file string) error {
 		if !options.Dry {
 			_, err = tx.Exec(isql, vals...)
 			if err != nil {
-				return err
+				return fmt.Errorf("Processing CSV file %#v on row %d: %w", file, rowindex, err)
 			}
 		}
 	}
