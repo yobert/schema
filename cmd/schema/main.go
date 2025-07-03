@@ -8,7 +8,7 @@ import (
 	"path"
 	"time"
 
-	_ "github.com/jackc/pgx/v4/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/yobert/schema"
 )
 

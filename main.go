@@ -6,7 +6,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -184,29 +184,30 @@ func LoadExisting(options *Options) (List, error) {
 func Search(options *Options) (List, error) {
 	var files List
 
-	search := []string{"**/*.sql", "**/*.csv"}
-
-	for _, s := range search {
-		p := options.SearchPath + "/" + s
-		fl, err := filepath.Glob(p)
+	err := filepath.WalkDir(options.SearchPath, func(fpath string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil, err
+			return err
 		}
-		for _, fpath := range fl {
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(fpath, ".sql") || strings.HasSuffix(fpath, ".csv") {
 			h, err := file_md5(fpath)
 			if err != nil {
-				return nil, err
+				return err
 			}
-
 			files = append(files, File{
 				Path: fpath,
 				MD5:  h,
 			})
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	sort.Sort(files)
-
 	return files, nil
 }
 
@@ -343,7 +344,7 @@ func file_md5(fpath string) (string, error) {
 }
 
 func schema_run_sql(options *Options, tx *sql.Tx, file string) error {
-	raw, err := ioutil.ReadFile(file)
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}
