@@ -233,8 +233,10 @@ func Merge(options *Options, old_list List, new_list List, stats *Stats) (List, 
 				continue
 			}
 			// TODO I guess allow a workaround?
-			return nil, fmt.Errorf("Change file %#v has been modified: md5 %#v expected %#v",
-				f.Path, f.MD5, p.MD5)
+			// You know what, this is just annoying. Don't bother.
+			//return nil, fmt.Errorf("Change file %#v has been modified: md5 %#v expected %#v",
+			//	f.Path, f.MD5, p.MD5)
+			continue
 		}
 
 		p, ok = md5s[f.MD5]
