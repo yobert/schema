@@ -1,477 +1,162 @@
-package schema
+package main
 
 import (
-	"crypto/md5"
-	"database/sql"
-	"encoding/csv"
+	"context"
+	"flag"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
+	"path"
 	"strconv"
-	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/joho/godotenv"
 )
 
-var (
-	FileListMatch      = regexp.MustCompile(`\D(\d{10})\D`)
-	TableFromPathMatch = regexp.MustCompile(`/([^/]+)/[^/]+$`)
-	PlaceholderMatch   = regexp.MustCompile(`\$\d+`)
-)
-
-type Stats struct {
-	Files int
-	New   int
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
-type Options struct {
-	DB         *sql.DB
-	SearchPath string
-	Dry        bool
-	Verbose    bool
+func run() error {
+	start := time.Now()
+	ctx := context.Background()
 
-	would_have_made_files_table bool
-}
+	var (
+		search  string
+		dry     bool
+		verbose bool
+	)
 
-type File struct {
-	Path string
-	MD5  string
-}
+	flag.StringVar(&search, "search", "./sql/", "Search path for SQL files")
+	flag.BoolVar(&dry, "dry", false, "Dry run mode")
+	flag.BoolVar(&verbose, "verbose-sql", false, "Print out SQL")
+	flag.Parse()
 
-type List []File
+	search = path.Clean(search)
 
-func (l List) Len() int {
-	return len(l)
-}
-func (l List) Swap(i, j int) {
-	l[i], l[j] = l[j], l[i]
-}
-func (l List) Less(i, j int) bool {
-	m1 := FileListMatch.FindStringSubmatch(l[i].Path)
-	m2 := FileListMatch.FindStringSubmatch(l[j].Path)
-	if m1 == nil && m2 == nil {
-		return l[i].Path < l[j].Path
-	}
-	if m1 == nil {
-		return true
-	}
-	if m2 == nil {
-		return false
-	}
-	i1, _ := strconv.Atoi(m1[1])
-	i2, _ := strconv.Atoi(m2[1])
-	if i1 < i2 {
-		return true
-	}
-	return false
-}
-
-func Run(options *Options) (*Stats, error) {
-
-	stats := &Stats{}
-
-	err := CreateSchemaSupport(options)
-	if err != nil {
-		return stats, err
+	if _, err := os.Stat(".env"); err == nil {
+		if err := godotenv.Load(".env"); err != nil {
+			return err
+		}
 	}
 
-	old_list, err := LoadExisting(options)
-	if err != nil {
-		return stats, err
-	}
-
-	new_list, err := Search(options)
-	if err != nil {
-		return stats, err
-	}
-
-	if len(new_list) == 0 {
-		return stats, fmt.Errorf("No schema change files found in %#v", options.SearchPath)
-	}
-
-	unran, err := Merge(options, old_list, new_list, stats)
-	if err != nil {
-		return stats, err
-	}
-
-	return stats, Execute(options, unran, stats)
-}
-
-func CreateSchemaSupport(options *Options) error {
-	db := options.DB
-
-	has := 0
-	row := db.QueryRow(`select count(1) as has from pg_namespace where nspname = $1 limit 1;`, "schemasupport")
-	err := row.Scan(&has)
+	config, err := parseConfig()
 	if err != nil {
 		return err
 	}
 
-	if has == 0 {
-		sql := `create schema schemasupport;`
-		if options.Verbose {
-			fmt.Println(sql)
-			fmt.Println()
-		}
-		if !options.Dry {
-			_, err = db.Exec(sql)
-			if err != nil {
-				return err
-			}
-		}
+	if config.Database == "" {
+		return fmt.Errorf("Database not specified. Configure via .env file with one of DATABASE_URL, SCHEMA_DATABASE_URL, SCHEMA_PGDATABASE")
 	}
 
-	has = 0
-	row = db.QueryRow(`select count(1) as has from pg_tables where schemaname = $1 and tablename = $2 limit 1;`, "schemasupport", "files")
-	err = row.Scan(&has)
+	db, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer db.Close(ctx)
+
+	options := &Options{
+		Ctx:        ctx,
+		Dry:        dry,
+		Verbose:    verbose,
+		DB:         db,
+		SearchPath: search,
+	}
+
+	msg := "up to date"
+	if dry {
+		msg = "dry run complete"
+	}
+
+	stats, err := Run(options)
 	if err != nil {
 		return err
 	}
 
-	if has == 0 {
-		sql := `create table schemasupport.files (path text not null, created timestamptz not null default now(), md5 text not null);`
-		if options.Verbose {
-			fmt.Println(sql)
-			fmt.Println()
-		}
-		if options.Dry {
-			options.would_have_made_files_table = true
-		} else {
-			_, err = db.Exec(sql)
-			if err != nil {
-				return err
-			}
-		}
-	}
+	took := time.Since(start)
+	took = truncate_duration(took)
 
+	fmt.Printf("Schema %s (%d files", msg, stats.Files)
+	fmt.Printf(", %d new", stats.New)
+	fmt.Printf(") in %s\n", took)
 	return nil
 }
 
-func LoadExisting(options *Options) (List, error) {
-	db := options.DB
+func truncate_duration(d time.Duration) time.Duration {
+	if d > time.Millisecond {
+		d = d / time.Millisecond * time.Millisecond
+	}
+	if d > time.Millisecond*100 {
+		d = d / (time.Millisecond * 100) * time.Millisecond * 100
+	}
+	if d > time.Second*10 {
+		d = d / time.Second * time.Second
+	}
+	if d > time.Minute*10 {
+		d = d / time.Minute * time.Minute
+	}
+	return d
+}
 
-	l := make(List, 0)
-
-	// Don't error out on the files table being missing if we're in dry run
-	// mode. The table would be created and be empty anyhow.
-	if options.Dry && options.would_have_made_files_table {
-		return l, nil
+// This is a little goofy. That's because I want it to assume the right thing in the typical case of
+// your schema being defined next to your application, and so a .env file will define how the application
+// talks to the database-- as opposed to how the schema tool should talk to the database, which will need
+// elevated permissions.
+//
+// Most applications will just define DATABASE_URL. This tool will assume user "postgres" with no password and
+// the same host setting as DATABASE_URL. These assumptions can be overridden by:
+// SCHEMA_PGDATABASE
+// SCHEMA_PGUSER
+// SCHEMA_PGPASSWORD
+// SCHEMA_PGHOST
+// SCHEMA_PGPORT
+func parseConfig() (*pgx.ConnConfig, error) {
+	appconfig, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return nil, fmt.Errorf("Error parsing DATABASE_URL: %w", err)
 	}
 
-	rows, err := db.Query(`select path, md5 from schemasupport.files;`)
+	config, err := pgx.ParseConfig(os.Getenv("SCHEMA_DATABASE_URL"))
 	if err != nil {
 		return nil, err
 	}
 
-	for rows.Next() {
-		var f File
-
-		if err := rows.Scan(&f.Path, &f.MD5); err != nil {
-			return nil, err
-		}
-
-		l = append(l, f)
+	if config.Database == "" {
+		config.Database = appconfig.Database
 	}
-	if err = rows.Err(); err != nil {
-		return nil, err
+	if config.Host == "" {
+		config.Host = appconfig.Host
 	}
+	if config.Port == 0 {
+		config.Port = appconfig.Port
+	}
+	if config.User == "" {
+		config.User = "postgres"
+	}
+	// default to no password
 
-	return l, nil
-}
-
-func Search(options *Options) (List, error) {
-	var files List
-
-	err := filepath.WalkDir(options.SearchPath, func(fpath string, d fs.DirEntry, err error) error {
+	if v := os.Getenv("SCHEMA_PGDATABASE"); v != "" {
+		config.Database = v
+	}
+	if v := os.Getenv("SCHEMA_PGUSER"); v != "" {
+		config.User = v
+	}
+	if v := os.Getenv("SCHEMA_PGPASSWORD"); v != "" {
+		config.Password = v
+	}
+	if v := os.Getenv("SCHEMA_PGHOST"); v != "" {
+		config.Host = v
+	}
+	if v := os.Getenv("SCHEMA_PGPORT"); v != "" {
+		i, err := strconv.ParseUint(v, 10, 16)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("Error parsing port number from SCHEMA_PGPORT: %w", err)
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(fpath, ".sql") || strings.HasSuffix(fpath, ".csv") {
-			h, err := file_md5(fpath)
-			if err != nil {
-				return err
-			}
-			files = append(files, File{
-				Path: fpath,
-				MD5:  h,
-			})
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		config.Port = uint16(i)
 	}
 
-	sort.Sort(files)
-	return files, nil
-}
-
-func Merge(options *Options, old_list List, new_list List, stats *Stats) (List, error) {
-
-	paths := make(map[string]File)
-	md5s := make(map[string]File)
-
-	for _, f := range old_list {
-		paths[f.Path] = f
-		md5s[f.MD5] = f
-	}
-
-	run := make(List, 0)
-
-	for _, f := range new_list {
-		stats.Files++
-
-		p, ok := paths[f.Path]
-		if ok {
-			if p.MD5 == f.MD5 {
-				// good, already ran, hash still matches
-				continue
-			}
-			// TODO I guess allow a workaround?
-			// You know what, this is just annoying. Don't bother.
-			//return nil, fmt.Errorf("Change file %#v has been modified: md5 %#v expected %#v",
-			//	f.Path, f.MD5, p.MD5)
-			continue
-		}
-
-		p, ok = md5s[f.MD5]
-		if ok {
-			return nil, fmt.Errorf("Change file %#v has already been run from path %#v",
-				f.Path, p.Path)
-		}
-
-		run = append(run, f)
-	}
-
-	return run, nil
-}
-
-func Execute(options *Options, run List, stats *Stats) error {
-	db := options.DB
-
-	if len(run) == 0 {
-		// Nothing to do
-		return nil
-	}
-
-	if options.Verbose {
-		fmt.Println("begin;")
-		fmt.Println()
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-
-	commit := false
-
-	defer func() {
-		if !commit {
-			if options.Verbose {
-				fmt.Println(`rollback;`)
-				fmt.Println()
-			}
-			err := tx.Rollback()
-			if err != nil {
-				fmt.Println("Transaction rollback error:", err)
-			}
-		}
-	}()
-
-	for _, f := range run {
-		fmt.Printf("-- %s\n", f.Path)
-
-		if strings.HasSuffix(f.Path, ".csv") {
-			err := schema_run_csv(options, tx, f.Path)
-			if err != nil {
-				return err
-			}
-		} else {
-			err := schema_run_sql(options, tx, f.Path)
-			if err != nil {
-				return err
-			}
-		}
-
-		sql := `insert into schemasupport.files (path, md5) values ($1, $2);`
-		if options.Verbose {
-			fmt.Println(debug_substitute(sql, f.Path, f.MD5))
-			fmt.Println()
-		}
-		if !options.Dry {
-			_, err := tx.Exec(sql, f.Path, f.MD5)
-			if err != nil {
-				return err
-			}
-		}
-
-		stats.New++
-	}
-
-	commit = true
-
-	if options.Verbose {
-		fmt.Println(`commit;`)
-		fmt.Println()
-	}
-	if !options.Dry {
-		err := tx.Commit()
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func file_md5(fpath string) (string, error) {
-	fh, err := os.Open(fpath)
-	if err != nil {
-		return "", err
-	}
-	defer fh.Close()
-
-	h := md5.New()
-	if _, err := io.Copy(h, fh); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-func schema_run_sql(options *Options, tx *sql.Tx, file string) error {
-	raw, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-
-	s := strings.Trim(string(raw), "\t\v\r\n ")
-	if options.Verbose {
-		fmt.Println(s)
-	}
-	if !options.Dry {
-		_, err = tx.Exec(s)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func schema_run_csv(options *Options, tx *sql.Tx, file string) error {
-	// for now, guess the table name for inserting from the path to the changefile
-	m := TableFromPathMatch.FindStringSubmatch(file)
-	if m == nil || len(m) != 2 {
-		return fmt.Errorf("Unable to figure out table name from changefile %#v", file)
-	}
-
-	table := m[1]
-
-	f, err := os.Open(file)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	var vals []interface{}
-	isql := ""
-
-	r := csv.NewReader(f)
-	rowindex := 0
-	for {
-		rowindex++
-
-		row, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		if isql == "" {
-			if len(row) == 0 {
-				return fmt.Errorf("No columns found in first line of file %#v", file)
-			}
-			vals = make([]interface{}, len(row))
-			isql = "insert into " + table + " (" + strings.Join(row, ", ") + ") values ("
-			for i, _ := range row {
-				if i > 0 {
-					isql += ", "
-				}
-				isql += fmt.Sprintf("$%d", i+1)
-			}
-			isql += ");"
-			continue
-		}
-
-		for i, v := range row {
-			vals[i] = v
-		}
-
-		if options.Verbose {
-			fmt.Println(debug_substitute(isql, row...))
-		}
-		if !options.Dry {
-			_, err = tx.Exec(isql, vals...)
-			if err != nil {
-				return fmt.Errorf("Processing CSV file %#v on row %d: %w", file, rowindex, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func debug_substitute(sql string, args ...string) string {
-
-	sql = PlaceholderMatch.ReplaceAllStringFunc(sql, func(in string) string {
-		out := in[1:] // chop off $
-		v, err := strconv.Atoi(out)
-		if err != nil {
-			return in
-		}
-		v--
-
-		if v < 0 || v > len(args)-1 {
-			return in
-		}
-
-		return quote(args[v])
-	})
-
-	return sql
-}
-
-func quote(in string) string {
-	out := ""
-	crappy := false
-
-	for _, v := range in {
-		if (v >= 'a' && v <= 'z') ||
-			(v >= 'A' && v <= 'Z') ||
-			(v >= '0' && v <= '9') ||
-			v == ' ' || v == '/' || v == '.' || v == '_' {
-			out += string(v)
-		} else {
-			crappy = true
-			if v < 128 {
-				out += fmt.Sprintf("\\x%02X", v)
-			} else if v < 65535 {
-				out += fmt.Sprintf("\\u%04X", v)
-			} else {
-				out += fmt.Sprintf("\\U%08X", v)
-			}
-		}
-	}
-	if crappy {
-		return "E'" + out + "'"
-	}
-	return "'" + out + "'"
+	return config, nil
 }
