@@ -48,6 +48,10 @@ func run() error {
 		return err
 	}
 
+	if verbose {
+		fmt.Println("schema connecting to", configString(config), "...")
+	}
+
 	if config.Database == "" {
 		return fmt.Errorf("Database not specified. Configure via .env file with one of DATABASE_URL, SCHEMA_DATABASE_URL, SCHEMA_PGDATABASE")
 	}
@@ -159,4 +163,13 @@ func parseConfig() (*pgx.ConnConfig, error) {
 	}
 
 	return config, nil
+}
+
+func configString(config *pgx.ConnConfig) string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
+		config.User,
+		"********",
+		config.Host,
+		config.Port,
+		config.Database)
 }
